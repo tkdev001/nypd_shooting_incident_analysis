@@ -1,0 +1,242 @@
+---
+title: "NYPD Shooting Incident Analysis"
+output:
+  pdf_document: default
+  html_document: default
+date: '2022-06-05'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_packages, include=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+```
+
+
+## Step 1: Load data
+
+Data description:
+
+This is a breakdown of every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year. This data is manually extracted every quarter and reviewed by the Office of Management Analysis and Planning before being posted on the NYPD website. Each record represents a shooting incident in NYC and includes information about the event, the location and time of occurrence. In addition, information related to suspect and victim demographics is also included. This data can be used by the public to explore the nature of shooting/criminal activity.
+
+https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic
+
+
+```{r import_nypd_data, message=FALSE, warning=FALSE}
+nypd_si_src <- read.csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD", stringsAsFactors = FALSE)
+
+head(nypd_si_src)
+
+summary(nypd_si_src)
+```
+
+
+## Step 2: Tidy and transform data
+
+1. Select the required fields
+2. Apply transformations on fields:
+  - PERP_AGE_GROUP, VIC_AGE_GROUP, PERP_RACE, VIC_RACE: Assign "UNKNOWN" to empty
+  - PERP_SEX, VIC_SEX: Assign "UNKNOWN" to empty and "U"
+3. Filter out records having erroneous value in PERP_AGE_GROUP
+4. Convert data type of fields
+
+
+```{r tidy_nypd_data, message=FALSE, warning=FALSE}
+nypd_si_stg <- nypd_si_src %>%
+               select(OCCUR_DATE, OCCUR_TIME, BORO, STATISTICAL_MURDER_FLAG, 
+                      PERP_AGE_GROUP, PERP_SEX, PERP_RACE,
+                      VIC_AGE_GROUP, VIC_SEX, VIC_RACE)
+
+nypd_si_stg$PERP_AGE_GROUP[nypd_si_stg$PERP_AGE_GROUP == ""] <- "UNKNOWN"
+nypd_si_stg$VIC_AGE_GROUP[nypd_si_stg$VIC_AGE_GROUP == ""] <- "UNKNOWN"
+nypd_si_stg$PERP_SEX[nypd_si_stg$PERP_SEX == "" | nypd_si_stg$PERP_SEX == "U"] <- "UNKNOWN"
+nypd_si_stg$VIC_SEX[nypd_si_stg$VIC_SEX == "" | nypd_si_stg$VIC_SEX == "U"] <- "UNKNOWN"
+nypd_si_stg$PERP_RACE[nypd_si_stg$PERP_RACE == ""] <- "UNKNOWN"
+nypd_si_stg$VIC_RACE[nypd_si_stg$VIC_RACE == ""] <- "UNKNOWN"
+
+nypd_si_stg <- nypd_si_stg %>% 
+               filter(PERP_AGE_GROUP %in% c("<18", "18-24", "25-44", "45-64", "65+", "UNKNOWN"))
+
+
+nypd_si <- nypd_si_stg %>%
+           mutate(OCCUR_DATE=mdy(OCCUR_DATE),
+                  OCCUR_TIME=hms(OCCUR_TIME),
+                  BORO=factor(BORO),
+                  PERP_AGE_GROUP=factor(PERP_AGE_GROUP),
+                  PERP_SEX=factor(PERP_SEX),
+                  PERP_RACE=factor(PERP_RACE),
+                  VIC_AGE_GROUP=factor(VIC_AGE_GROUP),
+                  VIC_SEX=factor(VIC_SEX),
+                  VIC_RACE=factor(VIC_RACE))
+
+summary(nypd_si)
+```
+
+
+## Step 3: Analyse data
+
+1. Overall trend of shooting incidents in NYC
+
+Shootings in NYC declined steadily from 2006 to 2019. But the number spiked in 2020.
+
+```{r overall_trend, message=FALSE, warning=FALSE}
+nypd_si_y <- nypd_si %>%
+             mutate(OCCUR_YEAR=year(OCCUR_DATE)) %>%
+             group_by(OCCUR_YEAR) %>%
+             count()
+
+nypd_si_y %>% ggplot(aes(x = OCCUR_YEAR, y = n)) +
+              geom_line() +
+              geom_point() +
+              labs(title = "NYC shooting incidents by year", y = "Count of incidents") +
+              theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) +
+              scale_x_continuous("Year", breaks=nypd_si_y$OCCUR_YEAR)
+```
+
+2. Seasonality of shooting incidents
+
+In general, there were more shooting cases in summer months.
+
+```{r seasonality, message=FALSE, warning=FALSE}
+nypd_si_ym <- nypd_si %>%
+              mutate(YEAR=factor(year(OCCUR_DATE)),
+                     MONTH=factor(month(OCCUR_DATE))) %>%
+              group_by(YEAR, MONTH) %>%
+              count()
+
+nypd_si_ym %>% ggplot(aes(x = MONTH, y = n, group = YEAR, colour = YEAR)) + 
+               geom_line() +
+               labs(title = "NYC shooting incidents by year-month", 
+                    x = "Month", y = "Count of incidents")
+```
+
+3. Day and time distribution of shootings
+
+There were more shooting incidents in weekends and night time.
+
+
+```{r day_of_week, message=FALSE, warning=FALSE}
+nypd_si_wd <- nypd_si %>%
+              mutate(DAY_OF_WEEK=factor(wday(OCCUR_DATE, label = TRUE, locale="English_United States"))) %>%
+              group_by(DAY_OF_WEEK) %>%
+              count()
+
+nypd_si_wd %>% ggplot(aes(x = DAY_OF_WEEK, y = n)) +
+               geom_col() +
+               labs(title = "Day of week distribution of shootings in NYC",
+                    x = "Day of week", y = "Count of incidents") +
+               theme_minimal()
+```
+
+```{r hour_of_day, message=FALSE, warning=FALSE}
+nypd_si_hour <- nypd_si %>%
+                mutate(OCCUR_HOUR=hour(OCCUR_TIME)) %>%
+                group_by(OCCUR_HOUR) %>%
+                count()
+
+nypd_si_hour %>% ggplot(aes(x = OCCUR_HOUR, y = n)) +
+                 geom_line() +
+                 geom_point() +
+                 labs(title = "Hour of day distribution of shootings in NYC",
+                      y = "Count of incidents") +
+                 scale_x_continuous("Hour of day", breaks=nypd_si_hour$OCCUR_HOUR) +
+                 theme_minimal()
+```
+
+4. Area distribution
+
+Most of the shooting incidents happened in Brooklyn, followed by Bronx, Queens, and Manhattan.
+
+```{r area, message=FALSE, warning=FALSE}
+nypd_si %>% ggplot(aes(x = BORO)) +
+            geom_bar() +
+            labs(title = "Area distribution of NYC shootings", 
+                 x = "Boroughs of NYC", y = "Count of incidents") +
+            theme_minimal()
+```
+
+5. The profile of perpetrators and victims
+
+* There were significantly more shooting incidents with male than those of female.
+* Large portion of incidents involved age group 18-24 and 25-44.
+* In terms of race, black accounted for the highest portion for both perpetrators and victims.
+
+
+```{r sex, message=FALSE, warning=FALSE}
+table(data.frame(nypd_si$PERP_SEX, nypd_si$VIC_SEX))
+```
+
+```{r age_group, message=FALSE, warning=FALSE}
+table(data.frame(nypd_si$PERP_AGE_GROUP, nypd_si$VIC_AGE_GROUP))
+```
+
+```{r race, message=FALSE, warning=FALSE}
+table(data.frame(nypd_si$PERP_RACE, nypd_si$VIC_RACE))
+```
+
+
+## Step 4: Use linear model to analyse the relationship between shooting cases and shooting cases which counted as murder
+
+The model shows that the number of shooting cases and shooting cases which counted as murder is positively correlated.
+
+```{r model, message=FALSE, warning=FALSE}
+nypd_si_murder <- nypd_si %>%
+                  mutate(YEAR=factor(year(OCCUR_DATE)),
+                         MONTH=factor(month(OCCUR_DATE))) %>%
+                  group_by(YEAR, MONTH) %>%
+                  summarise(cases=n(),
+                            murder_cases=sum(STATISTICAL_MURDER_FLAG == "true")) %>%
+                  select(YEAR, MONTH, cases, murder_cases) %>%
+                  ungroup() %>%
+                  arrange(YEAR, MONTH)
+
+mod = lm(murder_cases ~ cases, data = nypd_si_murder)
+
+summary(mod)
+
+nypd_si_murder_with_predict <- nypd_si_murder %>% 
+                               mutate(murder_cases_pred = predict(mod))
+
+nypd_si_murder_with_predict %>% ggplot() +
+                                geom_point(aes(x = cases, y = murder_cases), color = "blue") +
+                                geom_point(aes(x = cases, y = murder_cases_pred), color = "red") +
+                                labs(title = "Relationship between shootings and shootings which counted as murder",
+                                     x = "Shootings",
+                                     y = "Shootings which counted as murder")
+```
+
+
+## Step 5: Identify bias
+
+* The data source failed to capture data for some perpetrators and victims. The UNKNOWN values may impact the result of the analyses.
+* Above are just basic, simple analyses The characteristics of shooting cases can change over time. More thoughtful analyses are needed before drawing any conclusions.
+
+
+## Step 6: Conclusion
+
+* Shootings in NYC declined steadily from 2006 to 2019. But the number spiked in 2020.
+* Most of the shooting incidents happened in Brooklyn, followed by Bronx, Queens, and Manhattan.
+* In general, there were more shooting cases in summer months.
+* There were more shooting incidents in weekends and night time.
+* There were significantly more shooting incidents with male than those of female.
+* Large portion of incidents involved age group 18-24 and 25-44.
+* In terms of race, black accounted for the highest portion for both perpetrators and victims.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
